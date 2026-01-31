@@ -1,0 +1,15 @@
+{
+  "vehicleTypes": {
+    "Bike": {"baseFare": 20, "perKm": 10, "perMin": 1, "minFare": 30},
+    "Scooty": {"baseFare": 25, "perKm": 12, "perMin": 1.2, "minFare": 35},
+    "Standard": {"baseFare": 30, "perKm": 15, "perMin": 2, "minFare": 50},
+    "Comfort": {"baseFare": 40, "perKm": 18, "perMin": 2.5, "minFare": 60},
+    "Premium": {"baseFare": 60, "perKm": 25, "perMin": 3, "minFare": 80},
+    "XL": {"baseFare": 80, "perKm": 30, "perMin": 4, "minFare": 100}
+  },
+  "waiting": {"perMin": 2, "freeMins": 3},
+  "nightSurcharge": {"enabled": true, "startHour": 22, "endHour": 6, "multiplier": 1.25},
+  "surge": {"enabled": true, "defaultMultiplier": 1.0, "maxMultiplier": 3.0},
+  "platformCommission": 0.15,
+  "taxRate": 0.05
+}

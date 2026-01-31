@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "209875629980",
+    "project_id": "taxi-b610b",
+    "storage_bucket": "taxi-b610b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:209875629980:android:3dff9e09de59bc31e93a59",
+        "android_client_info": {
+          "package_name": "com.example.relaxi_taxi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-7Ynmjh5X1dGSVIEnOxl8LHmcB_CiV54"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

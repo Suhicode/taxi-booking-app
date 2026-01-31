@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Taxi Zone Admin</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+    .map-container { position: relative; height: 100vh; width: 100%; }
+    .sidebar { position: absolute; top: 0; right: 0; width: 400px; height: 100%; background: white; padding: 20px; overflow-y: auto; z-index: 1000; }
+    .leaflet-control-container .leaflet-top.leaflet-left { margin-top: 50px; }
+    .leaflet-control-container .leaflet-top.leaflet-right { margin-right: 420px; }
+    .draw-button { position: absolute; top: 100px; right: 420px; z-index: 1000; }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div class="flex">
+    <div class="map-container">
+      <div id="map"></div>
+      <button id="drawButton" class="draw-button bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+        Draw Zone
+      </button>
+      <div id="sidebar" class="sidebar shadow-lg">
+        <h1 class="text-2xl font-bold mb-6">Zone Management</h1>
+
+        <div class="mb-6">
+          <h2 class="text-xl font-semibold mb-4">Create New Zone</h2>
+          <form id="zoneForm" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Zone Name</label>
+              <input type="text" id="zoneName" required
+                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-gray-700">Slug (URL-friendly)</label>
+              <input type="text" id="zoneSlug" required
+                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Base Fare (₹)</label>
+                <input type="number" id="baseFare" value="30.00" step="0.01" min="0"
+                  class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Per KM (₹)</label>
+                <input type="number" id="perKm" value="15.00" step="0.01" min="0"
+                  class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Per Minute (₹)</label>
+                <input type="number" id="perMin" value="2.00" step="0.01" min="0"
+                  class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700">Minimum Fare (₹)</label>
+                <input type="number" id="minFare" value="50.00" step="0.01" min="0"
+                  class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+            </div>
+
+            <div class="flex items-center">
+              <input type="checkbox" id="surgeEnabled" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" />
+              <label class="ml-2 block text-sm text-gray-900">Enable Surge Pricing</label>
+            </div>
+
+            <div class="mt-4">
+              <button type="submit" id="saveZone"
+                class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                Save Zone
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div class="mt-8">
+          <h2 class="text-xl font-semibold mb-4">Existing Zones</h2>
+          <div id="zonesList" class="space-y-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Leaflet map with OpenStreetMap tiles
+    const map = L.map('map').setView([19.0760, 72.8777], 11);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Store zones and drawing state
+    let zones = [];
+    let currentDrawing = null;
+    let drawingPoints = [];
+    let isDrawing = false;
+
+    // Drawing functionality
+    document.getElementById('drawButton').addEventListener('click', function() {
+      isDrawing = !isDrawing;
+      if (isDrawing) {
+        this.textContent = 'Finish Drawing';
+        this.classList.replace('bg-blue-600', 'bg-green-600');
+        drawingPoints = [];
+        if (currentDrawing) {
+          map.removeLayer(currentDrawing);
+        }
+      } else {
+        this.textContent = 'Draw Zone';
+        this.classList.replace('bg-green-600', 'bg-blue-600');
+        if (drawingPoints.length >= 3) {
+          const polygon = L.polygon(drawingPoints, {
+            color: '#97009c',
+            fillColor: '#97009c',
+            fillOpacity: 0.3
+          });
+          currentDrawing = polygon;
+          polygon.addTo(map);
+        }
+      }
+    });
+
+    map.on('click', function(e) {
+      if (!isDrawing) return;
+      
+      const point = [e.latlng.lat, e.latlng.lng];
+      drawingPoints.push(point);
+      
+      // Add marker for visual feedback
+      L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
+      
+      // Draw line between points
+      if (drawingPoints.length > 1) {
+        if (currentDrawing && currentDrawing instanceof L.Polyline) {
+          map.removeLayer(currentDrawing);
+        }
+        const polyline = L.polyline(drawingPoints, {color: '#97009c'});
+        currentDrawing = polyline;
+        polyline.addTo(map);
+      }
+    });
+
+    async function loadZones() {
+      try {
+        const response = await fetch('http://localhost:3000/api/v1/zones');
+        zones = await response.json();
+        const zonesList = document.getElementById('zonesList');
+        zonesList.innerHTML = '';
+
+        zones.forEach((zone) => {
+          const zoneEl = document.createElement('div');
+          zoneEl.className = 'p-3 border rounded hover:bg-gray-50 cursor-pointer';
+          zoneEl.innerHTML = `
+            <div class="font-medium">${zone.name}</div>
+            <div class="text-sm text-gray-600">
+              Base: ₹${zone.base_fare} + ₹${zone.per_km}/km + ₹${zone.per_min}/min | Min: ₹${zone.minimum_fare}
+            </div>
+            <button onclick="deleteZone('${zone.id}')" class="mt-1 text-red-600 text-xs hover:text-red-800">Delete</button>
+          `;
+          zoneEl.onclick = () => highlightZone(zone);
+          zonesList.appendChild(zoneEl);
+
+          // Add zone to map
+          if (zone.geom && zone.geom.coordinates) {
+            const coordinates = zone.geom.coordinates[0].map(coord => [coord[1], coord[0]]);
+            const polygon = L.polygon(coordinates, {
+              color: '#0066cc',
+              fillColor: '#0066cc',
+              fillOpacity: 0.3,
+              weight: 2
+            });
+            polygon.zoneId = zone.id;
+            polygon.zoneData = zone;
+            polygon.addTo(map);
+          }
+        });
+      } catch (error) {
+        console.error('Error loading zones:', error);
+      }
+    }
+
+    function highlightZone(zone) {
+      // Find and highlight the zone
+      map.eachLayer(function(layer) {
+        if (layer instanceof L.Polygon && layer.zoneId === zone.id) {
+          layer.setStyle({
+            color: '#ff0000',
+            fillColor: '#ff0000',
+            fillOpacity: 0.5,
+            weight: 3
+          });
+          map.fitBounds(layer.getBounds());
+        }
+      });
+    }
+
+    async function deleteZone(zoneId) {
+      if (!confirm('Are you sure you want to delete this zone?')) return;
+      try {
+        const response = await fetch(`http://localhost:3000/api/v1/zones/${zoneId}`, { method: 'DELETE' });
+        if (response.ok) {
+          alert('Zone deleted successfully');
+          loadZones();
+        } else {
+          throw new Error('Failed to delete zone');
+        }
+      } catch (error) {
+        console.error('Error deleting zone:', error);
+        alert('Error deleting zone: ' + error.message);
+      }
+    }
+
+    document.getElementById('zoneForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      if (!currentDrawing || !(currentDrawing instanceof L.Polygon)) {
+        alert('Please draw a zone on the map first');
+        return;
+      }
+
+      // Convert Leaflet polygon to GeoJSON format
+      const geojson = currentDrawing.toGeoJSON();
+      
+      const zoneData = {
+        name: document.getElementById('zoneName').value,
+        slug: document.getElementById('zoneSlug').value,
+        geom: geojson.geometry,
+        base_fare: parseFloat(document.getElementById('baseFare').value),
+        per_km: parseFloat(document.getElementById('perKm').value),
+        per_min: parseFloat(document.getElementById('perMin').value),
+        minimum_fare: parseFloat(document.getElementById('minFare').value),
+        surge_enabled: document.getElementById('surgeEnabled').checked
+      };
+
+      try {
+        const response = await fetch('http://localhost:3000/api/v1/zones', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(zoneData)
+        });
+
+        if (response.ok) {
+          alert('Zone saved successfully!');
+          map.removeLayer(currentDrawing);
+          currentDrawing = null;
+          document.getElementById('zoneForm').reset();
+          loadZones();
+        } else {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to save zone');
+        }
+      } catch (error) {
+        console.error('Error saving zone:', error);
+        alert('Error: ' + error.message);
+      }
+    });
+
+    // Load zones when map is ready
+    map.whenReady(function() {
+      loadZones();
+    });
+  </script>
+</body>
+</html>

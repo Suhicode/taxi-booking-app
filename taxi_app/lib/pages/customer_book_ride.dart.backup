@@ -1,0 +1,460 @@
+// lib/pages/customer_book_ride.dart
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import '../services/driver_service_mock.dart';
+import '../services/location_service.dart';
+import '../services/pricing_service.dart';
+import '../widgets/vehicle_tile.dart';
+import '../widgets/web_map_view.dart';
+import '../widgets/free_autocomplete_field.dart';
+import '../widgets/booking_overlay.dart';
+import '../widgets/driver_card.dart';
+
+// Only import Google Maps on non-web platforms
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+
+class CustomerBookRidePage extends StatefulWidget {
+  const CustomerBookRidePage({super.key});
+
+  @override
+  State<CustomerBookRidePage> createState() => _CustomerBookRidePageState();
+}
+
+class _CustomerBookRidePageState extends State<CustomerBookRidePage> {
+  final Completer<GoogleMapController> _mapControllerCompleter = Completer();
+  Set<Marker> _driverMarkers = {};
+  LatLng? _currentLocation;
+  LatLng? _pickupLocation;
+  LatLng? _destination;
+  final TextEditingController _pickupController = TextEditingController();
+  final TextEditingController _destinationController = TextEditingController();
+  String _selectedVehicle = 'Standard';
+  int _estimatedPrice = 0;
+  bool _isLoading = true;
+  bool _driverAssigned = false;
+  final DriverService _driverService = DriverService();
+  StreamSubscription<List<DriverModel>>? _driverSub;
+  DriverModel? _assignedDriver;
+
+  final List<String> _vehicleTypes = ['Bike', 'Scooty', 'Standard', 'Comfort', 'Premium', 'XL'];
+
+  // Helper function to extract driver positions from markers
+  List<LatLng> _driverPositionsFromMarkers() {
+    return _driverMarkers.map((m) => m.position).toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Run initialization after first frame so UI can show a loader fast.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeLocation();
+      _subscribeToDrivers();
+    });
+  }
+
+  @override
+  void dispose() {
+    _driverSub?.cancel();
+    _pickupController.dispose();
+    _destinationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initializeLocation() async {
+    // Request permission first
+    final granted = await LocationService.requestPermission();
+    if (!granted) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location permission required')));
+      return;
+    }
+
+    final loc = await LocationService.getCurrentLocation();
+    if (loc != null) {
+      setState(() {
+        _currentLocation = loc;
+        _pickupLocation = loc;
+        _pickupController.text = 'Current Location';
+        _isLoading = false;
+      });
+      if (!kIsWeb) {
+        // wait for map to be created
+        if (_mapControllerCompleter.isCompleted) {
+          final c = await _mapControllerCompleter.future;
+          c.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: loc, zoom: 15)));
+        }
+      }
+    } else {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to get location')));
+    }
+  }
+
+  void _subscribeToDrivers() {
+    // Subscribe once and update markers only when changed
+    _driverSub = _driverService.getAvailableDrivers().listen((drivers) {
+      final newSet = drivers.map((d) => d.toMarker()).toSet();
+      // Minimal UI update: only call setState when markers actually changed
+      final changed = newSet.length != _driverMarkers.length ||
+          !newSet.every((m) => _driverMarkers.contains(m));
+      if (changed) {
+        setState(() {
+          _driverMarkers = newSet;
+        });
+      }
+    });
+  }
+
+  void _moveToLocation(LatLng location) async {
+    if (kIsWeb) {
+      // For web we rely on WebMapView.didUpdateWidget to move the map
+      setState(() {
+        _currentLocation = location;
+        // also set pickup as current if needed:
+        _pickupLocation = location;
+      });
+      return;
+    }
+    // mobile (GoogleMap)
+    if (_mapControllerCompleter.isCompleted) {
+      final controller = await _mapControllerCompleter.future;
+      controller.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: location, zoom: 16)));
+    }
+  }
+
+  void _updateEstimatedPrice() {
+    if (_pickupLocation != null && _destination != null) {
+      final distance = _calculateDistance(_pickupLocation!, _destination!);
+      final fare = PricingService.calculateFare(
+        vehicleType: _selectedVehicle,
+        distanceKm: distance,
+        durationMin: (distance * 3).toDouble(), // Rough estimate
+      );
+      setState(() {
+        _estimatedPrice = fare['total'] as int;
+      });
+    }
+  }
+
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    const R = 6371;
+    final dLat = (point2.latitude - point1.latitude) * pi / 180;
+    final dLon = (point2.longitude - point1.longitude) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(point1.latitude * pi / 180) *
+            cos(point2.latitude * pi / 180) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return R * c;
+  }
+
+  // when user selects pickup from autocomplete
+  void _onPickupSelected(String name, LatLng loc) {
+    setState(() {
+      _pickupLocation = loc;
+      // set currentLocation to the pickup so the map centers on it
+      _currentLocation = loc;
+      _pickupController.text = name;
+    });
+    // update camera / map center and price
+    _moveToLocation(loc);
+    _updateEstimatedPrice();
+  }
+
+  // when user selects destination from autocomplete
+  void _onDestinationSelected(String name, LatLng loc) {
+    setState(() {
+      _destination = loc;
+      _destinationController.text = name;
+    });
+    // center map on destination as well (optional) — use same move
+    _moveToLocation(loc);
+    _updateEstimatedPrice();
+  }
+
+  Widget _buildMap() {
+    final bool isWeb = kIsWeb;
+    if (isWeb) {
+      return WebMapView(
+        initialLocation: _currentLocation ?? const LatLng(13.0827, 80.2707),
+        pickup: _pickupLocation,
+        destination: _destination,
+        driverPositions: _driverPositionsFromMarkers(),
+        onDestinationSelected: (LatLng destination) {
+          setState(() {
+            _destination = destination;
+            _destinationController.text = 'Selected Destination';
+          });
+          _moveToLocation(destination);
+          _updateEstimatedPrice();
+        },
+      );
+    }
+
+    if (_currentLocation == null) {
+      return Container(
+        color: Colors.grey[300],
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(target: _currentLocation!, zoom: 15),
+      onMapCreated: (controller) {
+        if (!_mapControllerCompleter.isCompleted) {
+          _mapControllerCompleter.complete(controller);
+        }
+      },
+      markers: _driverMarkers,
+      myLocationEnabled: true,
+      myLocationButtonEnabled: false, // use custom button
+      onTap: (LatLng dest) {
+        setState(() {
+          _destination = dest;
+          _destinationController.text = 'Selected Destination';
+        });
+        _updateEstimatedPrice();
+      },
+    );
+  }
+
+  void _requestRide() {
+    final payload = {
+      'pickupLocation': {
+        'lat': _pickupLocation?.latitude,
+        'lng': _pickupLocation?.longitude,
+      },
+      'dropoffLocation': {
+        'lat': _destination?.latitude,
+        'lng': _destination?.longitude,
+      },
+      'vehicleType': _selectedVehicle,
+      'estimatedPrice': _estimatedPrice,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+
+    print('Ride Request Payload: $payload');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Ride requested! ₹$_estimatedPrice for $_selectedVehicle'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _selectPickup() {
+    // Show pickup selection dialog or navigate to pickup selection
+    // For now, we'll use the existing autocomplete functionality
+    // This could be expanded to show a bottom sheet or dialog
+  }
+
+  void _selectDestination() {
+    // Show destination selection dialog or navigate to destination selection
+    // For now, we'll use the existing autocomplete functionality
+    // This could be expanded to show a bottom sheet or dialog
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Stack(
+              children: [
+                // Map - with fallback for web
+                _buildMap(),
+
+                // Top Search Card
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 16,
+                  left: 16,
+                  right: 16,
+                  child: Card(
+                    elevation: 4,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Column(
+                        children: [
+                          // Pickup Location
+                          FreeAutocompleteField(
+                            hint: "Enter pickup location",
+                            controller: _pickupController,
+                            onSelected: (name, loc) => _onPickupSelected(name, loc),
+                          ),
+                          const Divider(height: 1),
+                          // Destination
+                          FreeAutocompleteField(
+                            hint: "Enter destination",
+                            controller: _destinationController,
+                            onSelected: (name, loc) => _onDestinationSelected(name, loc),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Bottom Ride Options Card
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 10,
+                          offset: const Offset(0, -5),
+                        )
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Vehicle Selector
+                          SizedBox(
+                            height: 120,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: _vehicleTypes.length,
+                              itemBuilder: (context, index) {
+                                final vehicle = _vehicleTypes[index];
+                                final fare = PricingService.calculateFare(
+                                  vehicleType: vehicle,
+                                  distanceKm: 5,
+                                  durationMin: 15,
+                                );
+                                return VehicleTile(
+                                  vehicleType: vehicle,
+                                  isSelected: _selectedVehicle == vehicle,
+                                  estimatedPrice: fare['total'] as int,
+                                  onTap: () {
+                                    setState(() => _selectedVehicle = vehicle);
+                                    _updateEstimatedPrice();
+                                  },
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Price and Request Button
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Estimated Price',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  Text(
+                                    '₹$_estimatedPrice',
+                                    style: const TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              ElevatedButton(
+                                onPressed: _requestRide,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.amber[700],
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 32,
+                                    vertical: 16,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Request Ride',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Driver Listener - only on non-web platforms
+                if (!kIsWeb)
+                  StreamBuilder<List<DriverModel>>(
+                    stream: _driverService.getAvailableDrivers(),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasData && snapshot.data != null) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          setState(() {
+                            _driverMarkers = {
+                              for (var driver in snapshot.data!) driver.toMarker(),
+                            };
+                          });
+                        });
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
+              // Custom location FAB (avoid built-in myLocationButton issues)
+                if (!kIsWeb)
+                  Positioned(
+                    right: 16,
+                    bottom: 180,
+                    child: FloatingActionButton(
+                      heroTag: 'locFab',
+                      mini: true,
+                      onPressed: () {
+                        if (_currentLocation != null) {
+                          _moveToLocation(_currentLocation!);
+                          setState(() {
+                            _pickupLocation = _currentLocation;
+                            _pickupController.text = 'Current Location';
+                          });
+                          _updateEstimatedPrice();
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Current location unknown')));
+                        }
+                      },
+                      child: const Icon(Icons.my_location),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
