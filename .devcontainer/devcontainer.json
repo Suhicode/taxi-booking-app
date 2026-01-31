@@ -1,0 +1,26 @@
+{
+  "name": "Taxi Booking App",
+  "dockerFile": "Dockerfile",
+  "context": "..",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "dart.flutterSdkPath": "/opt/flutter",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll": "explicit"
+        }
+      },
+      "extensions": [
+        "dart-code.flutter",
+        "dart-code.dart-code",
+        "ms-vscode.vscode-json",
+        "redhat.vscode-yaml",
+        "ms-vscode.vscode-typescript-next"
+      ]
+    }
+  },
+  "forwardPorts": [3000, 8080, 5000],
+  "postCreateCommand": "flutter pub get && cd taxi_app/backend && npm install",
+  "remoteUser": "vscode"
+}
