@@ -2,6 +2,7 @@ services:
   - type: web
     name: ridenow-backend
     env: python
+    runtime: python-3.11.8
     rootDir: ridenow_backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
